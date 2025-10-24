@@ -14,11 +14,64 @@ class AccountMove(models.Model):
         help='Indica si el nombre de la factura fue modificado manualmente'
     )
     month_out = fields.Char(string='Mes de entrega', tracking=True, help='Mes de entrega del pedido')
+    
     # Campo para almacenar el nombre original de la secuencia
     original_sequence_name = fields.Char(
         string='Nombre Original de Secuencia',
         help='Almacena el nombre generado por la secuencia antes de la modificación manual'
     )
+    
+    # Nuevos campos para retención
+    has_retention = fields.Boolean(
+        string='Tiene Retención',
+        default=False,
+        tracking=True,
+        help='Marcar si esta factura tiene retención'
+    )
+    
+    retention_amount = fields.Monetary(
+        string='Monto de Retención',
+        currency_field='currency_id',
+        default=0.0,
+        tracking=True,
+        help='Monto que será retenido y no se cobrará directamente'
+    )
+    
+    amount_after_retention = fields.Monetary(
+        string='Monto a Cobrar',
+        currency_field='currency_id',
+        compute='_compute_amount_after_retention',
+        store=True,
+        help='Monto total menos la retención'
+    )
+
+    @api.depends('amount_total', 'retention_amount', 'has_retention')
+    def _compute_amount_after_retention(self):
+        """Calcular el monto a cobrar después de la retención"""
+        for record in self:
+            if record.has_retention:
+                record.amount_after_retention = record.amount_total - record.retention_amount
+            else:
+                record.amount_after_retention = record.amount_total
+
+    @api.onchange('has_retention')
+    def _onchange_has_retention(self):
+        """Limpiar retención si se desmarca el checkbox"""
+        if not self.has_retention:
+            self.retention_amount = 0.0
+
+    @api.constrains('retention_amount', 'amount_total', 'has_retention')
+    def _check_retention_amount(self):
+        """Validar que la retención no sea mayor al total"""
+        for record in self:
+            if record.has_retention:
+                if record.retention_amount < 0:
+                    raise ValidationError(_('El monto de retención no puede ser negativo.'))
+                if record.retention_amount > record.amount_total:
+                    raise ValidationError(
+                        _('El monto de retención (%.2f) no puede ser mayor al monto total (%.2f).') % 
+                        (record.retention_amount, record.amount_total)
+                    )
 
     @api.model
     def create(self, vals):
